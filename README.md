@@ -44,7 +44,7 @@ Commands
 - `list-tables` to list the tables supported by the applications.
 - `list-columns ...` to list the names and descriptions of the columns in a given table.
 - `query-table ...`: Query a specific table using a circular search region centered at some RA,DEC position,
-    with some radius.
+    with some radius. A target name can also be supplied; name resolution requires an internet connection.
 - `aws-download ...`: Download the data from the AWS. The passed URI is what you get when calling `query-tables`
     and requesting the data products.
 - `self-update`: Update `hark` to the latest version to pick up the latest features and the most recent table updates.
@@ -71,14 +71,22 @@ Commands
 
   - Query xmmmaster around position 182.6,39.4 for default columns and add product links:
      `query-table xmmmaster 182.6,39.4 products`
+
+  - Query xmmmaster around the resolved coordinates of M31:
+    `query-table xmmmaster M31`
+
+  - Query a target name containing spaces:
+    `query-table xmmmaster "NGC 1300" 40`
     
 ## aws-download
   - Download SWIFT obsid 000037258040:
      `aws-download s3://nasa-heasarc/swift/data/obs/2015_12/00037258040`
 
 # FAQ
-- Can I search by source name?
-Currently this is not supported. You may want to use a name resolver like simbad to find the RA and DEC.
+- Does `query-table` support source names?
+Yes. The CDS name resolver looks up the target before the catalog search. This requires an internet connection;
+coordinate-based searches remain available offline. Quote names containing spaces, for example
+`query-table xmmmaster "NGC 1300"`.
 
 - What units should I use?
 RA and DEC are in degrees. The radius is in arc minutes.

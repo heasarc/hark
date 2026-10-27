@@ -672,7 +672,7 @@ fn get_product_link(table_name: &str, row: &Row) -> String {
             format!("chandra/data/byobsid/{substr}/{obsid}")
         },
         "numaster" => {
-            if obsid.len() < 3 { return "No Product Link (obsid too short)".to_string(); }
+            if obsid.len() < 3 { return "No Product Link (invalid obsid)".to_string(); }
             let substr1: String = obsid.chars().skip(1).take(2).collect();
             let substr2: String = obsid.chars().take(1).collect();
             format!("nustar/data/obs/{substr1}/{substr2}/{obsid}")
@@ -681,6 +681,24 @@ fn get_product_link(table_name: &str, row: &Row) -> String {
             if obsid.is_empty() { return "No Product Link (obsid empty)".to_string(); }
             let substr: String = obsid.chars().take(2).collect();
             format!("ixpe/data/obs/{substr}/{obsid}")
+        },
+        "xrismmastr" => {
+            if obsid.len() < 3 { return "No Product Link (invalid obsid)".to_string(); }
+            let substr: String = obsid.chars().take(1).collect();
+            format!("xrism/data/obs/{substr}/{obsid}")
+        },
+        "xtemaster" => {
+            if obsid.len() < 3 {
+                return "No Product Link (invalid obsid)".to_string();
+            }
+            let substr1: String = obsid.chars().skip(1).take(1).collect();
+            let substr2: String = obsid.chars().skip(2).take(1).collect();
+            let i1: i32 = substr1.parse().unwrap_or(0);
+            let i2: i32 = substr2.parse().unwrap_or(0);
+            // let i_ao = i1 * 10 + i2;
+            // let substr = format!("{:02}", i_ao);
+            let substr = format!("{}", i1 * 10 + i2);
+            format!("xte/data/archive/AO{substr}/{obsid}")
         },
         _ => {
             "No Product Link (unknown table)".to_string()
