@@ -1251,7 +1251,7 @@ dependencies = [
 
 [[package]]
 name = "hark"
-version = "0.1.250623"
+version = "0.2.271026"
 dependencies = [
  "anyhow",
  "aws-config",
@@ -1260,6 +1260,7 @@ dependencies = [
  "colored",
  "flate2",
  "openssl",
+ "reqwest",
  "rusqlite",
  "rustyline",
  "self_update",
