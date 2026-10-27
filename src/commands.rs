@@ -80,6 +80,8 @@ pub fn handle_help(args: &[String], _conn: &Connection) -> Result<()> {
         println!("{:>12}: The name of the table to be queried. Use {} to see a list of supported tables",
                 "table_name".cyan(), "list-tables".bold());
         println!("{:>12}: Search RA and DEC as: ra,dec in {}", "position".cyan(), "degrees".yellow());
+        println!("{:>12}: Or provide a target name (quote names containing spaces); this requires network access.",
+                "position".cyan());
         println!("{:>12}: Search radius in {}. If not given or 0, the default for the table is used.",
                 "radius".yellow().dimmed(), "arcmin".yellow());
         println!("{:>12}: Columns to be printed. Use */all for all columns. If not given or \"\", 
@@ -452,7 +454,7 @@ pub fn query_table(table: &str, position: &str, radius: &f64, columns_specifier:
         // If user provided 0.0, try to get the default radius from metainfo
         match get_default_radius(&conn, &table) {
             Ok(default_val) => {
-                println!("{}", "(Using default radius from metainfo)".italic());
+                println!("{}", "(Using default radius for the mission)".italic());
                 default_val
             },
             Err(e) => {

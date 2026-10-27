@@ -15,6 +15,7 @@ use tokio;
 
 mod cli;
 mod commands;
+mod resolver;
 
 /// A static list of officially supported table names.
 pub const SUPPORTED_TABLES: &[&str] = &[

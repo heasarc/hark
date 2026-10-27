@@ -3,6 +3,7 @@
 use anyhow::{Result};
 use rusqlite::Connection;
 use crate::commands;
+use crate::resolver;
 
 /// Outcome of a command execution
 pub enum CommandOutcome {
@@ -12,13 +13,13 @@ pub enum CommandOutcome {
 
 /// Parses the input line and dispatches the command.
 pub async fn parse_and_dispatch_command(line: &str, conn: &Connection) -> Result<CommandOutcome> {
-    let parts: Vec<&str> = line.split_whitespace().collect();
+    let parts = split_command_line(line)?;
     if parts.is_empty() {
         return Ok(CommandOutcome::Continue);
     }
 
     let command_name = parts[0].to_lowercase();
-    let args = parts[1..].iter().map(|s| s.to_string()).collect::<Vec<String>>();
+    let args = parts[1..].to_vec();
 
     // Basic command parsing logic (to be expanded significantly)
     match command_name.as_str() {
@@ -67,7 +68,11 @@ pub async fn parse_and_dispatch_command(line: &str, conn: &Connection) -> Result
             } else {
                 // Pass the first argument as the table_name
                 let table_name = &args[0];
-                let position_str = args[1].to_string();
+                let position_str = if crate::SUPPORTED_TABLES.contains(&table_name.as_str()) {
+                    resolver::resolve_position(&args[1]).await?
+                } else {
+                    args[1].clone()
+                };
                 let mut radius  = 0.0;
                 let mut columns_arg: Option<String> = None;
                 let mut products_only_flag = false;
@@ -102,5 +107,76 @@ pub async fn parse_and_dispatch_command(line: &str, conn: &Connection) -> Result
             println!("Unknown command: {}", command_name);
             Ok(CommandOutcome::Continue)
         }
+    }
+}
+
+fn split_command_line(line: &str) -> Result<Vec<String>> {
+    let mut parts = Vec::new();
+    let mut chars = line.chars().peekable();
+
+    while let Some(&next) = chars.peek() {
+        if next.is_whitespace() {
+            chars.next();
+            continue;
+        }
+
+        let mut part = String::new();
+        if next == '"' || next == '\'' {
+            let quote = chars.next().expect("peeked quote");
+            let mut closed = false;
+            while let Some(ch) = chars.next() {
+                if ch == quote {
+                    closed = true;
+                    break;
+                }
+                if ch == '\\' && chars.peek() == Some(&quote) {
+                    part.push(chars.next().expect("peeked escaped quote"));
+                } else {
+                    part.push(ch);
+                }
+            }
+            if !closed {
+                anyhow::bail!("Unterminated quoted argument");
+            }
+        } else {
+            while let Some(&ch) = chars.peek() {
+                if ch.is_whitespace() {
+                    break;
+                }
+                part.push(ch);
+                chars.next();
+            }
+        }
+        parts.push(part);
+    }
+
+    Ok(parts)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::split_command_line;
+
+    #[test]
+    fn parses_quoted_target_names_and_regular_arguments() {
+        let parts =
+            split_command_line(r#"query-table xmmmaster "NGC 1300" 40 ra,dec products"#).unwrap();
+
+        assert_eq!(
+            parts,
+            [
+                "query-table",
+                "xmmmaster",
+                "NGC 1300",
+                "40",
+                "ra,dec",
+                "products"
+            ]
+        );
+    }
+
+    #[test]
+    fn rejects_unterminated_quotes() {
+        assert!(split_command_line(r#"query-table xmmmaster "NGC 1300"#).is_err());
     }
 }

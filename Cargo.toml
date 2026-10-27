@@ -1,6 +1,6 @@
 [package]
 name = "hark"
-version = "0.1.261026"
+version = "0.2.271026"
 edition = "2024"
 
 [dependencies]
@@ -11,6 +11,7 @@ tempfile = "3.20.0"
 colored = "3.0.0"
 chrono = "0.4.41"
 flate2 = "1.1.2"
+reqwest = { version = "0.12.20", default-features = false, features = ["rustls-tls"] }
 aws-config = { version = "1.6.3", features = ["behavior-version-latest"] }
 aws-sdk-s3 = "1.91.0"
 tokio = { version = "1.45.1", features = ["full"] }
@@ -19,4 +20,3 @@ self_update = { version = "0.42.0", features = ["archive-tar", "compression-flat
 # Target-specific configurations for musl builds
 [target.x86_64-unknown-linux-musl.dependencies]
 openssl = { version = "0.10", features = ["vendored"] }
-
