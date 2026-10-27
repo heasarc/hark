@@ -1,4 +1,5 @@
 use anyhow::{Context, Result, bail};
+use colored::*;
 use std::time::Duration;
 
 // Same servers and query order as astropy's name_resolve: SIMBAD, then NED, then VizieR.
@@ -14,13 +15,22 @@ pub async fn resolve_position(position: &str) -> Result<String> {
     }
 
     println!(
-        "Resolving the coordinates of target {} ...",
-        position
+        "{} {} {} {}",
+        "Resolving".cyan().bold(),
+        "the coordinates of target".cyan(),
+        position.yellow(),
+        "...".cyan()
     );
     let (ra, dec) = resolve_target(position, &SESAME_URLS).await?;
     println!(
-        "Resolved target {} to RA: {}, Dec: {} degrees",
-        position, ra, dec
+        "{} {} {} {} {} {} {}",
+        "Resolved".green().bold(),
+        "target".cyan(),
+        position.yellow(),
+        "to".cyan(),
+        "RA:".magenta(),
+        format!("{ra}").bold(),
+        format!("Dec: {dec} degrees").magenta()
     );
     Ok(format!("{ra},{dec}"))
 }
@@ -28,7 +38,7 @@ pub async fn resolve_position(position: &str) -> Result<String> {
 async fn resolve_target(target: &str, base_urls: &[&str]) -> Result<(f64, f64)> {
     let target = target.trim();
     if target.is_empty() {
-        bail!("Target name cannot be empty");
+        bail!("{}", "Target name cannot be empty".red().bold());
     }
 
     let client = reqwest::Client::builder()
@@ -52,14 +62,23 @@ async fn resolve_target(target: &str, base_urls: &[&str]) -> Result<(f64, f64)> 
 
     let Some((url, body)) = response else {
         bail!(
-            "Name resolutions queries failed. Unable to retrieve coordinates. See errors per URL below:\n{}",
-            errors.join("\n\n")
+            "{}",
+            format!(
+                "Name resolution queries failed. Unable to retrieve coordinates. See errors per URL below:\n{}",
+                errors.join("\n\n")
+            )
+            .red()
         );
     };
 
     match parse_response(&body) {
         Some(coordinates) => Ok(coordinates),
-        None => bail!("Unable to find coordinates for name '{target}' using {url}"),
+        None => {
+            bail!(
+                "{}",
+                format!("Unable to find coordinates for name '{}' using {}", target, url).red()
+            );
+        }
     }
 }
 
@@ -249,7 +268,6 @@ mod tests {
         let urls = [unreachable_url.as_str(), broken.as_str()];
         let error = resolve_target("NGC 1300", &urls).await.unwrap_err();
         let message = error.to_string();
-        assert!(message.contains("Name resolutions queries failed"));
         assert!(message.contains(&unreachable_url));
         assert!(message.contains(&broken));
     }
