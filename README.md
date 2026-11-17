@@ -81,6 +81,7 @@ Commands
 ## aws-download
   - Download SWIFT obsid 000037258040:
      `aws-download s3://nasa-heasarc/swift/data/obs/2015_12/00037258040`
+  - Press Ctrl-C during a download to cancel it. Completed files are kept; the interrupted file is removed.
 
 # FAQ
 - Does `query-table` support source names?

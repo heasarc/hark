@@ -1,13 +1,37 @@
 use anyhow::{Context, Result, bail};
 use colored::*;
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 use std::time::Duration;
 
 // Same servers and query order as astropy's name_resolve: SIMBAD, then NED, then VizieR.
-const SESAME_URLS: [&str; 2] = [
-    "https://cds.unistra.fr/cgi-bin/nph-sesame/",
-    "http://vizier.cfa.harvard.edu/viz-bin/nph-sesame/",
+// add japan mirror server for sesame
+const SESAME_URLS: [&str; 6] = [
+    "https://cds.unistra.fr/cgi-bin/nph-sesame/SNV",
+    "http://vizier.cfa.harvard.edu/viz-bin/nph-sesame/SNV",
+    "http://vizier.cfa.harvard.edu/viz-bin/nph-sesame/NV",
+    "https://cds.unistra.fr/cgi-bin/nph-sesame/NV",
+    "https://sesame.nao.ac.jp/cgi-bin/nph-sesame/NV",
+    "https://sesame.nao.ac.jp/cgi-bin/nph-sesame/V",
 ];
-const SESAME_DATABASES: &str = "SNV";
+
+static CACHE: OnceLock<Mutex<HashMap<String, (f64, f64)>>> = OnceLock::new();
+
+/// Resolves a name, reusing results from earlier lookups in this session. Failures are not cached.
+async fn resolve_cached(target: &str, base_urls: &[&str]) -> Result<(f64, f64)> {
+    let key = target
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase();
+    let cache = CACHE.get_or_init(Default::default);
+    if let Some(&coordinates) = cache.lock().unwrap().get(&key) {
+        return Ok(coordinates);
+    }
+    let coordinates = resolve_target(target, base_urls).await?;
+    cache.lock().unwrap().insert(key, coordinates);
+    Ok(coordinates)
+}
 
 pub async fn resolve_position(position: &str) -> Result<String> {
     if looks_like_coordinate_input(position) {
@@ -21,7 +45,7 @@ pub async fn resolve_position(position: &str) -> Result<String> {
         position.yellow(),
         "...".cyan()
     );
-    let (ra, dec) = resolve_target(position, &SESAME_URLS).await?;
+    let (ra, dec) = resolve_cached(position, &SESAME_URLS).await?;
     println!(
         "{} {} {} {} {} {} {}",
         "Resolved".green().bold(),
@@ -43,14 +67,14 @@ async fn resolve_target(target: &str, base_urls: &[&str]) -> Result<(f64, f64)> 
 
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
-        .user_agent(concat!("heasarc-hark/", env!("CARGO_PKG_VERSION")))
+        // .user_agent(concat!("heasarc-hark/", env!("CARGO_PKG_VERSION")))
         .build()
         .context("Failed to create name-resolver client")?;
 
     let mut errors = Vec::new();
     let mut response = None;
     for base_url in base_urls {
-        let url = format!("{base_url}{SESAME_DATABASES}?{}", percent_encode(target));
+        let url = format!("{base_url}?{}", percent_encode(target));
         match fetch(&client, &url).await {
             Ok(body) => {
                 response = Some((url, body));
@@ -167,8 +191,8 @@ fn parse_response(response: &str) -> Option<(f64, f64)> {
 #[cfg(test)]
 mod tests {
     use super::{
-        looks_like_coordinate_input, parse_response, percent_encode, resolve_position,
-        resolve_target,
+        looks_like_coordinate_input, parse_response, percent_encode, resolve_cached,
+        resolve_position, resolve_target,
     };
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
     use tokio::net::TcpListener;
@@ -240,13 +264,13 @@ mod tests {
                 .await
                 .unwrap();
         });
-        format!("http://{address}/sesame/")
+        format!("http://{address}/sesame/SNV")
     }
 
     #[tokio::test]
     async fn falls_back_to_the_next_server_when_one_fails() {
         let unreachable = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let unreachable_url = format!("http://{}/sesame/", unreachable.local_addr().unwrap());
+        let unreachable_url = format!("http://{}/sesame/SNV", unreachable.local_addr().unwrap());
         drop(unreachable);
         let broken = serve_once("500 Internal Server Error", "oops").await;
         let working = serve_once("200 OK", "%J 10.5 -20.25 = 00:42:00 -20:15:00\n").await;
@@ -261,7 +285,7 @@ mod tests {
     #[tokio::test]
     async fn reports_every_server_error_when_all_fail() {
         let unreachable = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let unreachable_url = format!("http://{}/sesame/", unreachable.local_addr().unwrap());
+        let unreachable_url = format!("http://{}/sesame/SNV", unreachable.local_addr().unwrap());
         drop(unreachable);
         let broken = serve_once("500 Internal Server Error", "oops").await;
 
@@ -279,5 +303,14 @@ mod tests {
             .await
             .unwrap_err();
         assert!(error.to_string().contains("Unable to find coordinates"));
+    }
+
+    #[tokio::test]
+    async fn repeated_names_are_served_from_the_cache() {
+        // The server answers only one request, so a second network lookup would fail.
+        let server = serve_once("200 OK", "%J 10.5 -20.25 = 00:42:00 -20:15:00\n").await;
+        let urls = [server.as_str()];
+        assert_eq!(resolve_cached("NGC 1300", &urls).await.unwrap(), (10.5, -20.25));
+        assert_eq!(resolve_cached(" ngc  1300 ", &urls).await.unwrap(), (10.5, -20.25));
     }
 }

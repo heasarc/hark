@@ -267,6 +267,22 @@ pub fn list_columns(table_name: &str, all: &bool, conn: &Connection) -> Result<(
 }
 
 
+/// Formats a byte count using the largest unit that keeps the value at or above 1.
+fn format_size(bytes: u64) -> String {
+    const UNITS: [&str; 4] = ["B", "KB", "MB", "GB"];
+    let mut value = bytes as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit < UNITS.len() - 1 {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} B")
+    } else {
+        format!("{value:.1} {}", UNITS[unit])
+    }
+}
+
 pub async fn aws_download(s3_uri: &str, _conn: &Connection) -> Result<()> {
     println!("\nAttempting to download from: {}", s3_uri.cyan());
 
@@ -337,8 +353,23 @@ pub async fn aws_download(s3_uri: &str, _conn: &Connection) -> Result<()> {
 
     let mut downloaded_count = 0;
     let mut total_size_bytes: u64 = 0;
+    let mut cancelled = false;
 
-    while let Some(result) = objects_stream.next().await {
+    // Ctrl-C cancels the download instead of killing the whole prompt.
+    let (cancel_tx, mut cancel_rx) = tokio::sync::watch::channel(false);
+    let cancel_task = tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            let _ = cancel_tx.send(true);
+        }
+    });
+    println!("{}", "Press Ctrl-C to cancel the download.".dimmed());
+
+    'download: loop {
+        let next = tokio::select! {
+            _ = cancel_rx.wait_for(|c| *c) => { cancelled = true; break 'download; }
+            next = objects_stream.next() => next,
+        };
+        let Some(result) = next else { break };
         match result {
             Ok(output) => {
                 for object in output.contents() {
@@ -377,18 +408,34 @@ pub async fn aws_download(s3_uri: &str, _conn: &Connection) -> Result<()> {
                     }
                     
                     println!("  Downloading {} ...", object_key.yellow());
-                    match client.get_object().bucket(bucket.clone()).key(object_key.to_string()).send().await {
+                    let get_result = tokio::select! {
+                        _ = cancel_rx.wait_for(|c| *c) => { cancelled = true; break 'download; }
+                        r = client.get_object().bucket(bucket.clone()).key(object_key.to_string()).send() => r,
+                    };
+                    match get_result {
                         Ok(get_obj_output) => {
                             let mut file = File::create(&final_local_path).await.with_context(|| format!("Failed to create file {}", final_local_path.display()))?;
                             let mut byte_stream = get_obj_output.body;
                             let mut file_size_bytes: u64 = 0;
-                            while let Some(bytes) = byte_stream.try_next().await.with_context(|| format!("Failed to read bytes from S3 stream for {}", object_key))? {
+                            loop {
+                                let chunk = tokio::select! {
+                                    _ = cancel_rx.wait_for(|c| *c) => None,
+                                    chunk = byte_stream.try_next() => Some(chunk),
+                                };
+                                let Some(chunk) = chunk else {
+                                    // Remove the incomplete file so it is not mistaken for a finished download.
+                                    drop(file);
+                                    let _ = fs::remove_file(&final_local_path).await;
+                                    cancelled = true;
+                                    break 'download;
+                                };
+                                let Some(bytes) = chunk.with_context(|| format!("Failed to read bytes from S3 stream for {}", object_key))? else { break };
                                 file.write_all(&bytes).await.with_context(|| format!("Failed to write to file {}", final_local_path.display()))?;
                                 file_size_bytes += bytes.len() as u64;
                             }
                             total_size_bytes += file_size_bytes;
                             downloaded_count += 1;
-                            println!("    {} Downloaded ({} MB)", "Success:".green(), file_size_bytes / 1024 / 1024);
+                            println!("    {} Downloaded ({})", "Success:".green(), format_size(file_size_bytes));
                         }
                         Err(e) => eprintln!("    {} Failed to download {}: {}", "Error:".red(), object_key.yellow(), e),
                     }
@@ -401,9 +448,14 @@ pub async fn aws_download(s3_uri: &str, _conn: &Connection) -> Result<()> {
         }
     }
 
-    if downloaded_count > 0 {
-        println!("\n{} Downloaded {} files, total size {} MB to {}.", "Finished:".bold().green(),
-                    downloaded_count, total_size_bytes / 1024 / 1024, local_base_path.display());
+    cancel_task.abort();
+
+    if cancelled {
+        println!("\n{} Download cancelled. {} complete files ({}) kept in {}; the interrupted file was removed.", "Cancelled:".bold().yellow(),
+                    downloaded_count, format_size(total_size_bytes), local_base_path.display());
+    } else if downloaded_count > 0 {
+        println!("\n{} Downloaded {} files, total size {} to {}.", "Finished:".bold().green(),
+                    downloaded_count, format_size(total_size_bytes), local_base_path.display());
     } else {
         println!("\n{} No files found to download for S3 prefix '{}' in bucket '{}', or an error occurred during listing.", "Info:".yellow(), prefix, bucket);
     }
@@ -691,14 +743,15 @@ fn get_product_link(table_name: &str, row: &Row) -> String {
             if obsid.len() < 3 {
                 return "No Product Link (invalid obsid)".to_string();
             }
-            let substr1: String = obsid.chars().skip(1).take(1).collect();
-            let substr2: String = obsid.chars().skip(2).take(1).collect();
+            let substr1: String = obsid.chars().skip(0).take(1).collect();
+            let substr2: String = obsid.chars().skip(1).take(1).collect();
+            let obs: String = obsid.chars().skip(0).take(5).collect();
             let i1: i32 = substr1.parse().unwrap_or(0);
             let i2: i32 = substr2.parse().unwrap_or(0);
             // let i_ao = i1 * 10 + i2;
             // let substr = format!("{:02}", i_ao);
-            let substr = format!("{}", i1 * 10 + i2);
-            format!("xte/data/archive/AO{substr}/{obsid}")
+            let substr = format!("{}", i1 + i2 * 10);
+            format!("xte/data/archive/AO{substr}/P{obs}/{obsid}")
         },
         _ => {
             "No Product Link (unknown table)".to_string()
