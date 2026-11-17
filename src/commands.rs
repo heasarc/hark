@@ -277,11 +277,20 @@ fn format_size(bytes: u64) -> String {
         value /= 1024.0;
         unit += 1;
     }
+
     if unit == 0 {
         format!("{bytes} B")
     } else {
         format!("{value:.1} {}", UNITS[unit])
     }
+}
+
+fn pad_cell(value: &str, width: usize) -> String {
+    format!("{value:<width$}")
+}
+
+fn cell_width(value: &str) -> usize {
+    value.chars().count()
 }
 
 pub async fn aws_download(s3_uri: &str, _conn: &Connection) -> Result<()> {
@@ -562,21 +571,6 @@ pub fn query_table(table: &str, position: &str, radius: &f64, columns_specifier:
         }
     }
 
-    // Construct and print the header
-    let mut header_line = format!("{:<5} | {:<10}",
-                                    "#".bold(), "Offset (')".bold());
-    for col_name in &display_columns_vec {
-        //if col_name != "ra" && col_name != "dec" && col_name != "id" { // Assuming 'id' is special and ra/dec handled
-            header_line.push_str(&format!(" | {:<12}", col_name.bold()));
-        //}
-    }
-    if *add_prods {
-        header_line.push_str(&format!(" | {:<20}", "link".bold()));
-    }
-
-    println!("\n{}", header_line);
-    //println!("{}", separator_line);
-
     let ra_rad = user_ra.to_radians();
     let dec_rad = user_dec.to_radians();
     let unit_x = ra_rad.sin() * dec_rad.cos();
@@ -594,42 +588,88 @@ pub fn query_table(table: &str, position: &str, radius: &f64, columns_specifier:
     let mut stmt = conn.prepare(&query)?;
     let mut rows = stmt.query([unit_x, unit_y, unit_z, radius_c])?;
     let mut last_prod = "".to_string(); // use for printing help at the end
-    
-    let mut found_count = 0;
+
+    let mut result_rows: Vec<(String, Vec<String>, Option<String>)> = Vec::new();
     while let Some(row) = rows.next()? {
         let row_offset = row.get::<_, f64>("_offset")?; // Use ? to propagate error
-        let sep = "|".blue();
-
-        found_count += 1;
-                            
-        // Start building the output line with fixed columns
-        let mut output_line = format!("{:<5} | {:<10.6}",
-                    found_count.to_string().cyan(),
-                    (row_offset.acos().to_degrees() * 60.0).to_string().yellow()
-        );
+        let offset = format!("{:.6}", row_offset.acos().to_degrees() * 60.0);
+        let mut values = Vec::with_capacity(display_columns_vec.len());
         for col_name in &display_columns_vec {
             // Try to get the column value as Option<String>
             match row.get::<_, Option<String>>(col_name.as_str()) {
                 Ok(Some(val)) => {
-                    output_line.push_str(&format!(" {} {:<12}", sep, val));
+                    values.push(val);
                 }
                 Ok(None) => {
-                    output_line.push_str(&format!(" {} {:<12}", sep, "NULL".dimmed()));
+                    values.push("NULL".to_string());
                 }
                 Err(_) => {
                     // This column might not be in SELECT (if select_clause_for_sql is out of sync with display_columns_vec)
                     // or it's not convertible to Option<String>
-                    output_line.push_str(&format!(" {} {}: {}", sep, col_name.red(), "<N/A>".dimmed()));
+                    values.push(format!("{}: <N/A>", col_name));
                 }
             }
         }
-        if *add_prods {
+        let product = if *add_prods {
             // Always add product link at the end
             let product_link = get_product_link(table, row);
-            last_prod = format!("{}{}", "s3://nasa-heasarc/".green(), product_link.green());
-            output_line.push_str(&format!(" {} {}", sep, last_prod));
+            last_prod = format!("{}{}", "s3://nasa-heasarc/", product_link);
+            Some(last_prod.clone())
+        } else {
+            None
+        };
+        result_rows.push((offset, values, product));
+    }
+
+    let mut widths = vec![5usize, 10usize];
+    for (index, col_name) in display_columns_vec.iter().enumerate() {
+        widths.push(cell_width(col_name).max(12));
+        for (_, values, _) in &result_rows {
+            widths[index + 2] = widths[index + 2].max(cell_width(&values[index]));
         }
-        
+    }
+    if *add_prods {
+        let product_width = result_rows
+            .iter()
+            .filter_map(|(_, _, product)| product.as_deref())
+            .map(cell_width)
+            .max()
+            .unwrap_or(0)
+            .max(20);
+        widths.push(product_width);
+    }
+
+    let mut header_line = format!("{} | {}",
+        pad_cell("#", widths[0]).bold(),
+        pad_cell("Offset (')", widths[1]).bold());
+    for (index, col_name) in display_columns_vec.iter().enumerate() {
+        header_line.push_str(&format!(" | {}", pad_cell(col_name, widths[index + 2]).bold()));
+    }
+    if *add_prods {
+        header_line.push_str(&format!(" | {}", pad_cell("link", *widths.last().unwrap()).bold()));
+    }
+    println!("\n{}", header_line);
+
+    let mut found_count = 0;
+    for (offset, values, product) in result_rows {
+        found_count += 1;
+        let mut output_line = format!("{} | {}",
+            pad_cell(&found_count.to_string(), widths[0]).cyan(),
+            pad_cell(&offset, widths[1]).yellow());
+        for (index, value) in values.iter().enumerate() {
+            let padded = pad_cell(value, widths[index + 2]);
+            let colored_value = if value == "NULL" {
+                padded.dimmed().to_string()
+            } else if value.ends_with(": <N/A>") {
+                padded.red().to_string()
+            } else {
+                padded
+            };
+            output_line.push_str(&format!(" {} {}", "|".blue(), colored_value));
+        }
+        if let Some(product) = product {
+            output_line.push_str(&format!(" {} {}", "|".blue(), pad_cell(&product, *widths.last().unwrap()).green()));
+        }
         println!("{}", output_line); // Print the complete line
     }
 
