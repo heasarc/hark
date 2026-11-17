@@ -18,6 +18,7 @@ use self_update::{self, cargo_crate_version};
 use crate::SUPPORTED_TABLES;
 
 const INTERNAL_COLS_ARRAY: [&str; 3] = ["__x_ra_dec", "__y_ra_dec", "__z_ra_dec"];
+const QUERY_DEFAULT_COLUMNS: [&str; 3] = ["obsid", "ra", "dec"];
 
 pub fn handle_help(args: &[String], _conn: &Connection) -> Result<()> {
     if args.is_empty() {
@@ -85,7 +86,7 @@ pub fn handle_help(args: &[String], _conn: &Connection) -> Result<()> {
         println!("{:>12}: Search radius in {}. If not given or 0, the default for the table is used.",
                 "radius".yellow().dimmed(), "arcmin".yellow());
         println!("{:>12}: Columns to be printed. Use */all for all columns. If not given or \"\", 
-        the default is used. Use list-columns to see available columns",
+        the default columns are obsid, ra, and dec. Use list-columns to see available columns",
                 "columns".yellow().dimmed());
         println!("{:>12}: Print product links. If given, add product links to the table.
             e.g. {}.
@@ -556,21 +557,8 @@ pub fn query_table(table: &str, position: &str, radius: &f64, columns_specifier:
             }
         }
         None => { // Default columns
-            match get_default_columns(conn, table) { // get_default_columns returns comma-separated string
-                Ok(default_cols_str) if !default_cols_str.is_empty() => {
-                    display_columns_vec = default_cols_str.split(',').map(String::from).collect();
-                    let sql_select_set: HashSet<String> = display_columns_vec.iter().cloned().collect();
-                    select_clause_for_sql = sql_select_set.into_iter().collect::<Vec<String>>().join(", ");
-                }
-                _ => { // Error or no default columns defined, fallback to all
-                    println!("{}", "(No default display columns defined or error fetching, showing all. Specify columns or use 'list-columns' to see available.)".italic());
-                    select_clause_for_sql = "*".to_string();
-                    display_columns_vec = get_all_table_columns(conn, table)?
-                        .into_iter()
-                        //.filter(|c| !INTERNAL_COLS_ARRAY.contains(&c.as_str()))
-                        .collect();
-                }
-            }
+            display_columns_vec = QUERY_DEFAULT_COLUMNS.iter().map(|column| (*column).to_string()).collect();
+            select_clause_for_sql = QUERY_DEFAULT_COLUMNS.join(", ");
         }
     }
 
@@ -757,32 +745,6 @@ fn get_product_link(table_name: &str, row: &Row) -> String {
             "No Product Link (unknown table)".to_string()
         }
     }
-}
-
-// Function to query metainfo and get a comma-separated list of default column names
-fn get_default_columns(conn: &Connection, table_name: &str) -> Result<String, rusqlite::Error> {
-    let query = r#"
-        SELECT
-            substr(name, instr(name, '.') + 1) AS column_name
-        FROM metainfo
-        WHERE type='parameter' AND name LIKE ?1 || '.%'
-        GROUP BY substr(name, instr(name, '.') + 1)
-        HAVING MAX(CASE WHEN relation = 'order' THEN CAST(value AS INTEGER) END) IS NOT NULL
-        ORDER BY
-            CASE
-                WHEN MAX(CASE WHEN relation = 'order' THEN CAST(value AS INTEGER) END) IS NULL THEN 1
-                ELSE 0
-            END,
-            MAX(CASE WHEN relation = 'order' THEN CAST(value AS INTEGER) END);
-    "#;
-
-    let mut stmt = conn.prepare(query)?;
-    let column_names_iter = stmt.query_map(params![table_name], |row| row.get::<_, String>(0))?;
-
-    let column_names: Result<Vec<String>, _> = column_names_iter.collect();
-    let column_names = column_names?; // Propagate any error from fetching rows
-
-    Ok(column_names.join(","))
 }
 
 // Function to query metainfo for default radius from a table

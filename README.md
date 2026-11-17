@@ -57,6 +57,8 @@ Commands
   - List all columns for the SWIFT master catalog:
     `list-columns swiftmastr all`
 ## query-table
+  By default, `query-table` prints only the `obsid`, `ra`, and `dec` columns.
+
   - Query nicermastr around position 182.6,39.4 using the default radius:
     `query-table nicermastr 182.6,39.4`
 
